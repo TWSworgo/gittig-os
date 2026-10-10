@@ -1,0 +1,48 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String      @id @default(uuid())
+  username     String      @unique
+  email        String      @unique
+  passwordHash String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  quota        UsageQuota?
+  auditLogs    AuditLog[]
+}
+
+model UsageQuota {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  dailyAiLimit        Int      @default(30)
+  usedAiToday         Int      @default(0)
+
+  maxRepositories     Int      @default(5)
+  maxStorageMb        Int      @default(100)
+  usedStorageMb       Float    @default(0.0)
+
+  dailyBuildMinsLimit Int      @default(15)
+  usedBuildMinsToday  Int      @default(0)
+
+  lastResetDate       DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+}
