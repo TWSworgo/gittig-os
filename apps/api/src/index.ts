@@ -10,13 +10,14 @@ import { executeAiQuery } from '../../../packages/ai-engine/index';
 import { saveCodeMemory, searchCodeMemory } from './memory.service';
 import { executeBuildPipeline } from './flow.service';
 import { scanCodebaseSecurity } from './sentinel.service';
+import { provisionLiveDeployment, getRegistryPackages } from './launch.service';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', engine: 'GittiG Core, AI, Flow & Sentinel v1.0' });
+  res.json({ status: 'ok', engine: 'GittiG Core, Flow, Sentinel & Launch v1.0' });
 });
 
 // AI চ্যাট
@@ -61,7 +62,6 @@ app.post('/api/sentinel/scan', (req, res) => {
       { path: 'src/index.ts', content: "import express from 'express';\nconst app = express();" },
       { path: 'src/services/auth.service.ts', content: "export function auth() { return true; }" }
     ];
-
     if (simulateLeak) {
       const mockKey = ['sk', 'live', 'demo_key_9928172648291048'].join('_');
       files.push({
@@ -69,7 +69,6 @@ app.post('/api/sentinel/scan', (req, res) => {
         content: `DATABASE_URL=postgres://...\nSTRIPE_SECRET_KEY=${mockKey}\nADMIN_PASSWORD="my_super_secret_db_pass_123"`
       });
     }
-
     const report = scanCodebaseSecurity(files);
     res.json({ success: true, report });
   } catch (err: any) {
@@ -77,7 +76,28 @@ app.post('/api/sentinel/scan', (req, res) => {
   }
 });
 
+// ৮. GittiG Launch (লাইভ প্রিভিউ হোস্টিং)
+app.post('/api/launch/deploy', (req, res) => {
+  try {
+    const { repoName } = req.body;
+    const deployment = provisionLiveDeployment(repoName || 'my-gittig-core-app');
+    res.json({ success: true, deployment });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ৯. GittiG Registry (রিলিজ ও প্যাকেজ হাব)
+app.get('/api/registry/releases', (req, res) => {
+  try {
+    const releases = getRegistryPackages('my-gittig-core-app');
+    res.json({ success: true, releases });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = 4000;
 app.listen(PORT, () => {
-  console.log(`[GittiG OS] Core, Flow & Sentinel live on http://localhost:${PORT}`);
+  console.log(`[GittiG OS] Full Engine live on http://localhost:${PORT}`);
 });
