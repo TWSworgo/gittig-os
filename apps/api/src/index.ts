@@ -11,33 +11,17 @@ import { saveCodeMemory, searchCodeMemory } from './memory.service';
 import { executeBuildPipeline } from './flow.service';
 import { scanCodebaseSecurity } from './sentinel.service';
 import { provisionLiveDeployment, getRegistryPackages } from './launch.service';
+import { getMarketplaceCatalog, processPurchase } from './marketplace.service';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', engine: 'GittiG Core, Flow, Sentinel & Launch v1.0' });
+  res.json({ status: 'ok', engine: 'GittiG Full OS & Marketplace v1.0' });
 });
 
-// AI চ্যাট
-app.post('/api/ai/query', async (req, res) => {
-  try {
-    const { userId, prompt, userApiKey, provider } = req.body;
-    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
-    if (!userApiKey && userId) {
-      const quotaCheck = await verifyAiQuota(userId);
-      if (!quotaCheck.allowed) return res.status(429).json({ error: quotaCheck.message });
-      await prisma.usageQuota.update({ where: { userId }, data: { usedAiToday: { increment: 1 } } });
-    }
-    const aiResult = await executeAiQuery({ prompt, userApiKey, preferredProvider: provider || 'groq' });
-    res.json({ success: true, aiResult });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// CI/CD Flow
+// Flow CI/CD
 app.post('/api/flow/trigger', async (req, res) => {
   try {
     const { target, repoName } = req.body;
@@ -58,16 +42,10 @@ app.get('/api/flow/artifacts/:filename', (req, res) => {
 app.post('/api/sentinel/scan', (req, res) => {
   try {
     const { simulateLeak } = req.body;
-    let files = [
-      { path: 'src/index.ts', content: "import express from 'express';\nconst app = express();" },
-      { path: 'src/services/auth.service.ts', content: "export function auth() { return true; }" }
-    ];
+    let files = [{ path: 'src/index.ts', content: "const app = express();" }];
     if (simulateLeak) {
       const mockKey = ['sk', 'live', 'demo_key_9928172648291048'].join('_');
-      files.push({
-        path: '.env.production',
-        content: `DATABASE_URL=postgres://...\nSTRIPE_SECRET_KEY=${mockKey}\nADMIN_PASSWORD="my_super_secret_db_pass_123"`
-      });
+      files.push({ path: '.env.production', content: `STRIPE_KEY=${mockKey}\nPASS="secret_123"` });
     }
     const report = scanCodebaseSecurity(files);
     res.json({ success: true, report });
@@ -76,22 +54,25 @@ app.post('/api/sentinel/scan', (req, res) => {
   }
 });
 
-// ৮. GittiG Launch (লাইভ প্রিভিউ হোস্টিং)
+// Launch হোস্টিং
 app.post('/api/launch/deploy', (req, res) => {
   try {
-    const { repoName } = req.body;
-    const deployment = provisionLiveDeployment(repoName || 'my-gittig-core-app');
+    const deployment = provisionLiveDeployment(req.body.repoName || 'my-gittig-core-app');
     res.json({ success: true, deployment });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ৯. GittiG Registry (রিলিজ ও প্যাকেজ হাব)
-app.get('/api/registry/releases', (req, res) => {
+// ১০. GittiG Marketplace এন্ডপয়েন্ট
+app.get('/api/marketplace/items', (req, res) => {
+  res.json({ success: true, items: getMarketplaceCatalog() });
+});
+
+app.post('/api/marketplace/buy', (req, res) => {
   try {
-    const releases = getRegistryPackages('my-gittig-core-app');
-    res.json({ success: true, releases });
+    const receipt = processPurchase(req.body.itemId);
+    res.json({ success: true, receipt });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -99,5 +80,5 @@ app.get('/api/registry/releases', (req, res) => {
 
 const PORT = 4000;
 app.listen(PORT, () => {
-  console.log(`[GittiG OS] Full Engine live on http://localhost:${PORT}`);
+  console.log(`[GittiG OS] Full OS & Economy Engine live on http://localhost:${PORT}`);
 });
