@@ -5,13 +5,14 @@ import { prisma } from './db';
 import { verifyAiQuota } from './guardrails';
 import { createGitRepository, createGitPullRequest } from './git.service';
 import { executeAiQuery } from '../../../packages/ai-engine/index';
+import { saveCodeMemory, searchCodeMemory } from './memory.service';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', engine: 'GittiG Core & AI Intelligence v1.0' });
+  res.json({ status: 'ok', engine: 'GittiG Core, AI & Qdrant Memory v1.0' });
 });
 
 // ১. রেজিস্ট্রেশন
@@ -19,17 +20,10 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
     const passwordHash = await bcrypt.hash(password || 'devpass123', 10);
-
     const user = await prisma.user.create({
-      data: {
-        username,
-        email,
-        passwordHash,
-        quota: { create: {} }
-      },
+      data: { username, email, passwordHash, quota: { create: {} } },
       include: { quota: true }
     });
-
     res.json({ message: "User registered with strict guardrails!", user });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -62,53 +56,23 @@ app.post('/api/repos/create', async (req, res) => {
   }
 });
 
-// ৩. GittiG Intelligence (AI চ্যাট ও কোডিং উইথ BYOK & কঠোর কোটা)
-app.post('/api/ai/query', async (req, res) => {
+// ৩. কোড ভেক্টর মেমোরিতে ইনডেক্স করা (Qdrant)
+app.post('/api/memory/index', async (req, res) => {
   try {
-    const { userId, prompt, userApiKey, provider } = req.body;
-    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+    const { id, filePath, codeSnippet } = req.body;
+    const result = await saveCodeMemory(id || 1, filePath, codeSnippet);
+    res.json({ success: true, message: `Code indexed into Qdrant memory from ${filePath}`, result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    let isByok = false;
-
-    // যদি ব্যবহারকারী নিজস্ব API কি ব্যবহার না করে, তবে কঠোর কোটা কাটা হবে
-    if (!userApiKey) {
-      if (!userId) return res.status(400).json({ error: "userId is required for platform AI usage" });
-      
-      const quotaCheck = await verifyAiQuota(userId);
-      if (!quotaCheck.allowed) {
-        return res.status(429).json({ error: quotaCheck.message });
-      }
-
-      // কোটা ১ বাড়ানো
-      await prisma.usageQuota.update({
-        where: { userId },
-        data: { usedAiToday: { increment: 1 } }
-      });
-    } else {
-      isByok = true; // BYOK হলে কোনো লিমিট কাটা হবে না
-    }
-
-    const aiResult = await executeAiQuery({
-      prompt,
-      userApiKey,
-      preferredProvider: provider || 'groq'
-    });
-
-    // লেটেস্ট কোটা তথ্য বের করা
-    let quotaInfo = null;
-    if (userId) {
-      const q = await prisma.usageQuota.findUnique({ where: { userId } });
-      if (q) {
-        quotaInfo = { usedAiToday: q.usedAiToday, dailyLimit: q.dailyAiLimit, remaining: q.dailyAiLimit - q.usedAiToday };
-      }
-    }
-
-    res.json({
-      success: true,
-      isByok,
-      aiResult,
-      quotaStatus: isByok ? "Unlimited (BYOK Key active - ৳০ server cost)" : quotaInfo
-    });
+// ৪. মেমোরি সার্চ ও AI কনটেক্সট উত্তর
+app.post('/api/memory/search', async (req, res) => {
+  try {
+    const { query } = req.body;
+    const searchResults = await searchCodeMemory(query);
+    res.json({ success: true, query, matches: searchResults.result || [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -116,5 +80,5 @@ app.post('/api/ai/query', async (req, res) => {
 
 const PORT = 4000;
 app.listen(PORT, () => {
-  console.log(`[GittiG OS] Core & AI Intelligence live on http://localhost:${PORT}`);
+  console.log(`[GittiG OS] Core, AI & Memory live on http://localhost:${PORT}`);
 });

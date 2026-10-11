@@ -39,7 +39,17 @@ services:
     volumes:
       - giteadata:/data
 
+  qdrant:
+    image: qdrant/qdrant:v1.9.0
+    container_name: gittig_qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+
 volumes:
   pgdata:
   redisdata:
   giteadata:
+  qdrantdata:
