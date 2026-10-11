@@ -4,16 +4,17 @@ import bcrypt from 'bcryptjs';
 import { prisma } from './db';
 import { verifyAiQuota } from './guardrails';
 import { createGitRepository, createGitPullRequest } from './git.service';
+import { executeAiQuery } from '../../../packages/ai-engine/index';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', engine: 'GittiG Guardrails & Git Core v1.0' });
+  res.json({ status: 'ok', engine: 'GittiG Core & AI Intelligence v1.0' });
 });
 
-// ১. ইউজার রেজিস্ট্রেশন
+// ১. রেজিস্ট্রেশন
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
@@ -35,71 +36,79 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// ২. কঠোর লিমিটেশনসহ গিট রিপোজিটরি তৈরি
+// ২. রিপোজিটরি তৈরি
 app.post('/api/repos/create', async (req, res) => {
   try {
     const { userId, repoName, description, isPrivate } = req.body;
-
-    if (!userId || !repoName) {
-      return res.status(400).json({ error: "userId and repoName are required" });
-    }
-
-    // কোটা যাচাই (কঠোর সর্বোচ্চ ৫টি রিপোজিটরি লিমিট)
     const quota = await prisma.usageQuota.findUnique({ where: { userId } });
     if (!quota) return res.status(404).json({ error: "User quota not found" });
 
     const currentRepoCount = await prisma.repository.count({ where: { ownerId: userId } });
-
     if (currentRepoCount >= quota.maxRepositories) {
-      await prisma.auditLog.create({
-        data: {
-          userId,
-          action: "REPO_LIMIT_EXCEEDED",
-          details: `Blocked: Attempted to create repository #${currentRepoCount + 1} (Max limit: ${quota.maxRepositories})`
-        }
-      });
-
-      return res.status(403).json({
-        error: `Guardrails Blocked: Maximum repository limit (${quota.maxRepositories}) reached! Upgrade or delete existing repository.`
-      });
+      return res.status(403).json({ error: `Max repository limit (${quota.maxRepositories}) reached!` });
     }
 
-    // Git ইঞ্জিনে আসল রিপোজিটরি তৈরি
     const gitRepo = await createGitRepository(repoName, description, isPrivate);
-
-    // মেটাডাটা ডাটাবেজে সংরক্ষণ
     const savedRepo = await prisma.repository.create({
-      data: {
-        name: repoName,
-        description: description || '',
-        isPrivate: !!isPrivate,
-        ownerId: userId
-      }
+      data: { name: repoName, description: description || '', isPrivate: !!isPrivate, ownerId: userId }
     });
 
     res.json({
       success: true,
-      message: "Git Repository initialized successfully!",
-      repository: {
-        id: savedRepo.id,
-        name: savedRepo.name,
-        cloneUrl: gitRepo.clone_url,
-        defaultBranch: gitRepo.default_branch,
-        totalReposUsed: currentRepoCount + 1,
-        maxAllowed: quota.maxRepositories
-      }
+      repository: { id: savedRepo.id, name: savedRepo.name, cloneUrl: gitRepo.clone_url, totalReposUsed: currentRepoCount + 1, maxAllowed: quota.maxRepositories }
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ৩. Pull Request (PR) তৈরি
-app.post('/api/repos/pulls', async (req, res) => {
+// ৩. GittiG Intelligence (AI চ্যাট ও কোডিং উইথ BYOK & কঠোর কোটা)
+app.post('/api/ai/query', async (req, res) => {
   try {
-    const { repoName, title, headBranch, baseBranch } = req.body;
-    const pr = await createGitPullRequest(repoName, title, headBranch, baseBranch || 'main');
-    res.json({ success: true, message: "Pull Request created!", pr });
+    const { userId, prompt, userApiKey, provider } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+
+    let isByok = false;
+
+    // যদি ব্যবহারকারী নিজস্ব API কি ব্যবহার না করে, তবে কঠোর কোটা কাটা হবে
+    if (!userApiKey) {
+      if (!userId) return res.status(400).json({ error: "userId is required for platform AI usage" });
+      
+      const quotaCheck = await verifyAiQuota(userId);
+      if (!quotaCheck.allowed) {
+        return res.status(429).json({ error: quotaCheck.message });
+      }
+
+      // কোটা ১ বাড়ানো
+      await prisma.usageQuota.update({
+        where: { userId },
+        data: { usedAiToday: { increment: 1 } }
+      });
+    } else {
+      isByok = true; // BYOK হলে কোনো লিমিট কাটা হবে না
+    }
+
+    const aiResult = await executeAiQuery({
+      prompt,
+      userApiKey,
+      preferredProvider: provider || 'groq'
+    });
+
+    // লেটেস্ট কোটা তথ্য বের করা
+    let quotaInfo = null;
+    if (userId) {
+      const q = await prisma.usageQuota.findUnique({ where: { userId } });
+      if (q) {
+        quotaInfo = { usedAiToday: q.usedAiToday, dailyLimit: q.dailyAiLimit, remaining: q.dailyAiLimit - q.usedAiToday };
+      }
+    }
+
+    res.json({
+      success: true,
+      isByok,
+      aiResult,
+      quotaStatus: isByok ? "Unlimited (BYOK Key active - ৳০ server cost)" : quotaInfo
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -107,5 +116,5 @@ app.post('/api/repos/pulls', async (req, res) => {
 
 const PORT = 4000;
 app.listen(PORT, () => {
-  console.log(`[GittiG OS] Core Gateway live on http://localhost:${PORT}`);
+  console.log(`[GittiG OS] Core & AI Intelligence live on http://localhost:${PORT}`);
 });
